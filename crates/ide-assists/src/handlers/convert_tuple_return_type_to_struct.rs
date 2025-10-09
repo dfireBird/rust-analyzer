@@ -4,7 +4,7 @@ use ide_db::{
     FxHashSet,
     assists::AssistId,
     defs::Definition,
-    helpers::mod_path_to_ast,
+    helpers::{check_module_name_conflict, mod_path_to_ast},
     imports::insert_use::{ImportScope, insert_use},
     search::{FileReference, UsageSearchResult},
     source_change::SourceChangeBuilder,
@@ -155,8 +155,8 @@ fn replace_usages(
                 }
             }
             // add imports across modules where needed
-            if let Some((import_scope, path)) = import_data {
-                insert_use(&import_scope, path, &ctx.config.insert_use);
+            if let Some((import_scope, path, has_module_name_conflict)) = import_data {
+                insert_use(&import_scope, path, &ctx.config.insert_use, has_module_name_conflict);
             }
         })
     }
@@ -181,7 +181,7 @@ fn augment_references_with_imports(
     references: &[FileReference],
     struct_name: &str,
     target_module: &hir::Module,
-) -> Vec<(ast::NameLike, Option<(ImportScope, ast::Path)>)> {
+) -> Vec<(ast::NameLike, Option<(ImportScope, ast::Path, bool)>)> {
     let mut visited_modules = FxHashSet::default();
 
     references
@@ -201,6 +201,8 @@ fn augment_references_with_imports(
 
                 let cfg =
                     ctx.config.find_path_config(ctx.sema.is_nightly(ref_module.krate(ctx.sema.db)));
+                let has_module_name_conflict =
+                    check_module_name_conflict(ctx.db(), ModuleDef::Module(*target_module));
                 let import_scope =
                     ImportScope::find_insert_use_container(new_name.syntax(), &ctx.sema);
                 let path = ref_module
@@ -220,7 +222,9 @@ fn augment_references_with_imports(
                         )
                     });
 
-                import_scope.zip(path)
+                import_scope.zip(path).and_then(|(import_scope, path)| {
+                    Some((import_scope, path, has_module_name_conflict))
+                })
             } else {
                 None
             };
@@ -887,6 +891,51 @@ fn bar() -> $0usize {
             r#"
 fn bar() -> $0(impl Clone, usize) {
     ("bar", 0)
+}
+"#,
+        )
+    }
+
+    #[test]
+    fn auto_import_with_module_name_conflict() {
+        check_assist(
+            convert_tuple_return_type_to_struct,
+            r#"
+use foo::bar;
+
+mod foo {
+    pub mod bar {
+        pub fn baz() -> $0(usize, usize) {
+            (1, 3)
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let (bar, baz) = bar::baz();
+    println!("{}", bar == baz);
+}
+"#,
+            r#"
+use foo::{bar, bar::{BazResult}};
+
+mod foo {
+    pub mod bar {
+        pub struct BazResult(pub usize, pub usize);
+
+        pub fn baz() -> BazResult {
+            BazResult(1, 3)
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let BazResult(bar, baz) = bar::baz();
+    println!("{}", bar == baz);
 }
 "#,
         )

@@ -1,4 +1,5 @@
 use hir::AsAssocItem;
+use ide_db::helpers::check_module_name_conflict;
 use syntax::{
     TextRange,
     ast::{self, AstNode, HasArgList, prec::ExprPrecedence},
@@ -86,7 +87,9 @@ pub(crate) fn unqualify_method_call(acc: &mut Assists, ctx: &AssistContext<'_>) 
                 && !scope.can_use_trait_methods(trait_)
             {
                 // Only add an import for trait methods that are not already imported.
-                add_import(qualifier, ctx, edit);
+                let has_module_name_conflict =
+                    check_module_name_conflict(ctx.db(), hir::ModuleDef::Trait(trait_));
+                add_import(qualifier, ctx, edit, has_module_name_conflict);
             }
         },
     )
@@ -96,6 +99,7 @@ fn add_import(
     qualifier: ast::Path,
     ctx: &AssistContext<'_>,
     edit: &mut ide_db::source_change::SourceChangeBuilder,
+    has_module_name_conflict: bool,
 ) {
     if let Some(path_segment) = qualifier.segment() {
         // for `<i32 as std::ops::Add>`
@@ -123,7 +127,12 @@ fn add_import(
 
         if let Some(scope) = scope {
             let scope = edit.make_import_scope_mut(scope);
-            ide_db::imports::insert_use::insert_use(&scope, import, &ctx.config.insert_use);
+            ide_db::imports::insert_use::insert_use(
+                &scope,
+                import,
+                &ctx.config.insert_use,
+                has_module_name_conflict,
+            );
         }
     }
 }
@@ -349,6 +358,57 @@ fn baz() {
     foo::Foo.bar();
 }
         "#,
+        );
+    }
+
+    #[test]
+    fn import_with_module_name_conflict() {
+        check_assist(
+            unqualify_method_call,
+            r#"
+use foo::bar;
+
+mod foo {
+    pub mod bar {
+        pub struct Foo;
+        pub trait Baz {
+            fn baz(&self) {}
+        }
+        impl Baz for Foo {
+            fn baz(&self) {}
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    bar();
+    foo::bar::Baz::ba$0z(&bar::Foo);
+}
+"#,
+            r#"
+use foo::{bar, bar::{Baz}};
+
+mod foo {
+    pub mod bar {
+        pub struct Foo;
+        pub trait Baz {
+            fn baz(&self) {}
+        }
+        impl Baz for Foo {
+            fn baz(&self) {}
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    bar();
+    (&bar::Foo).baz();
+}
+"#,
         );
     }
 }

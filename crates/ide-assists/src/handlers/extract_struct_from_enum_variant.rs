@@ -5,7 +5,7 @@ use hir::{HasCrate, Module, ModuleDef, Name, Variant};
 use ide_db::{
     FxHashSet, RootDatabase,
     defs::Definition,
-    helpers::mod_path_to_ast,
+    helpers::{check_module_name_conflict, mod_path_to_ast},
     imports::insert_use::{ImportScope, InsertUseConfig, insert_use},
     path_transform::PathTransform,
     search::FileReference,
@@ -371,11 +371,16 @@ fn apply_references(
     insert_use_cfg: InsertUseConfig,
     segment: ast::PathSegment,
     node: SyntaxNode,
-    import: Option<(ImportScope, hir::ModPath)>,
+    import: Option<(ImportScope, hir::ModPath, bool)>,
     edition: Edition,
 ) {
-    if let Some((scope, path)) = import {
-        insert_use(&scope, mod_path_to_ast(&path, edition), &insert_use_cfg);
+    if let Some((scope, path, has_module_name_conflict)) = import {
+        insert_use(
+            &scope,
+            mod_path_to_ast(&path, edition),
+            &insert_use_cfg,
+            has_module_name_conflict,
+        );
     }
     // deep clone to prevent cycle
     let path = make::path_from_segments(iter::once(segment.clone_subtree()), false);
@@ -391,7 +396,7 @@ fn process_references(
     enum_module_def: &ModuleDef,
     variant_hir_name: &Name,
     refs: Vec<FileReference>,
-) -> Vec<(ast::PathSegment, SyntaxNode, Option<(ImportScope, hir::ModPath)>)> {
+) -> Vec<(ast::PathSegment, SyntaxNode, Option<(ImportScope, hir::ModPath, bool)>)> {
     // we have to recollect here eagerly as we are about to edit the tree we need to calculate the changes
     // and corresponding nodes up front
     refs.into_iter()
@@ -411,9 +416,15 @@ fn process_references(
                 if let Some(mut mod_path) = mod_path {
                     mod_path.pop_segment();
                     mod_path.push_segment(variant_hir_name.clone());
+                    let has_module_name_conflict =
+                        check_module_name_conflict(ctx.db(), *enum_module_def);
                     let scope = ImportScope::find_insert_use_container(&scope_node, &ctx.sema)?;
                     visited_modules.insert(module);
-                    return Some((segment, scope_node, Some((scope, mod_path))));
+                    return Some((
+                        segment,
+                        scope_node,
+                        Some((scope, mod_path, has_module_name_conflict)),
+                    ));
                 }
             }
             Some((segment, scope_node, None))
@@ -1187,6 +1198,49 @@ struct A<T: TraitT> { a: T }
 enum En<T: TraitT, V: TraitV> {
     A(A<T>),
     B { b: V },
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn import_with_module_name_conflict() {
+        check_assist(
+            extract_struct_from_enum_variant,
+            r#"
+use foo::{bar, bar::E};
+
+mod foo {
+    pub mod bar {
+        pub enum E {
+            $0V(u8, u8)
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let e = E::V(0, 1);
+}
+"#,
+            r#"
+use foo::{bar, bar::{E, V}};
+
+mod foo {
+    pub mod bar {
+        pub struct V(pub u8, pub u8);
+
+        pub enum E {
+            V(V)
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let e = E::V(V(0, 1));
 }
 "#,
         );

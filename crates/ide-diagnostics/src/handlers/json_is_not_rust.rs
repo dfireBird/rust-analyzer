@@ -2,6 +2,7 @@
 //! example.
 
 use hir::{FindPathConfig, PathResolution, Semantics};
+use ide_db::helpers::check_module_name_conflict;
 use ide_db::text_edit::TextEdit;
 use ide_db::{
     EditionedFileId, FileRange, FxHashMap, RootDatabase,
@@ -129,6 +130,9 @@ pub(crate) fn json_in_items(
                 state.build_struct("Root", &it);
                 edit.insert(range.start(), state.result);
                 let vfs_file_id = file_id.file_id(sema.db);
+                let has_name_conflict = |res: Option<PathResolution>| {
+                    res.is_some_and(|pr| matches!(pr, PathResolution::Def(def) if check_module_name_conflict(sema.db, def)))
+                };
                 acc.push(
                     Diagnostic::new(
                         DiagnosticCode::Ra("json-is-not-rust", Severity::WeakWarning),
@@ -157,7 +161,12 @@ pub(crate) fn json_in_items(
                                 cfg,
                             )
                         {
-                            insert_use(&scope, mod_path_to_ast(&it, edition), &config.insert_use);
+                            insert_use(
+                                &scope,
+                                mod_path_to_ast(&it, edition),
+                                &config.insert_use,
+                                has_name_conflict(serialize_resolved),
+                            );
                         }
                         if !scope_has("Deserialize")
                             && let Some(PathResolution::Def(it)) = deserialize_resolved
@@ -168,7 +177,12 @@ pub(crate) fn json_in_items(
                                 cfg,
                             )
                         {
-                            insert_use(&scope, mod_path_to_ast(&it, edition), &config.insert_use);
+                            insert_use(
+                                &scope,
+                                mod_path_to_ast(&it, edition),
+                                &config.insert_use,
+                                has_name_conflict(deserialize_resolved),
+                            );
                         }
                         let mut sc = scb.finish();
                         sc.insert_source_edit(vfs_file_id, edit.finish());

@@ -126,3 +126,21 @@ pub fn get_definition(
     }
     None
 }
+
+pub fn check_module_name_conflict_item(db: &RootDatabase, item: ItemInNs) -> bool {
+    check_module_name_conflict(db, item.into_module_def())
+}
+
+pub fn check_module_name_conflict(db: &RootDatabase, def: ModuleDef) -> bool {
+    let import_module =
+        if let ModuleDef::Module(module) = def { Some(module) } else { def.module(db) };
+    let parent_module = import_module.and_then(|m| m.parent(db));
+    if let Some((m, pm)) = import_module.zip(parent_module) {
+        for decl in pm.declarations(db) {
+            if decl != hir::ModuleDef::Module(m) && decl.name(db) == m.name(db) {
+                return true;
+            }
+        }
+    }
+    false
+}

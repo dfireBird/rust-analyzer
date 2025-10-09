@@ -385,3 +385,45 @@ Some multi-line comment$0
         String::new(),
     );
 }
+
+#[test]
+fn import_with_module_name_conflicts() {
+    check_edit(
+        "Baz",
+        r#"
+use foo::bar;
+
+mod foo {
+    pub mod bar {
+        pub enum Baz {
+            BazVariant,
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let t = Ba$0;
+    let b = bar();
+}"#,
+        r#"
+use foo::{bar, bar::{Baz}};
+
+mod foo {
+    pub mod bar {
+        pub enum Baz {
+            BazVariant,
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let t = Baz;
+    let b = bar();
+}
+"#,
+    );
+}

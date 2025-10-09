@@ -4,7 +4,7 @@ use either::Either;
 use hir::{Module, Type, db::HirDatabase};
 use ide_db::{
     active_parameter::ActiveParameter,
-    helpers::mod_path_to_ast,
+    helpers::{check_module_name_conflict_item, mod_path_to_ast},
     imports::{
         import_assets::{ImportAssets, ImportCandidate, LocatedImport},
         insert_use::{ImportScope, insert_use, insert_use_as_alias},
@@ -120,6 +120,8 @@ pub(crate) fn auto_import(acc: &mut Assists, ctx: &AssistContext<'_>) -> Option<
     let group_label = group_label(import_assets.import_candidate());
     for import in proposed_imports {
         let import_path = import.import_path;
+        let has_module_name_conflict =
+            check_module_name_conflict_item(ctx.db(), import.item_to_import);
 
         let (assist_id, import_name) =
             (AssistId::quick_fix("auto_import"), import_path.display(ctx.db(), edition));
@@ -130,7 +132,12 @@ pub(crate) fn auto_import(acc: &mut Assists, ctx: &AssistContext<'_>) -> Option<
             range,
             |builder| {
                 let scope = builder.make_import_scope_mut(scope.clone());
-                insert_use(&scope, mod_path_to_ast(&import_path, edition), &ctx.config.insert_use);
+                insert_use(
+                    &scope,
+                    mod_path_to_ast(&import_path, edition),
+                    &ctx.config.insert_use,
+                    has_module_name_conflict,
+                );
             },
         );
 
@@ -1893,6 +1900,49 @@ mod m {
 
 #[cfg(test)]
 fn foo(_: S) {}
+"#,
+        );
+    }
+
+    #[test]
+    fn module_fn_with_same_name() {
+        check_assist(
+            auto_import,
+            r#"
+use foo::bar;
+
+mod foo {
+    pub mod bar {
+        pub enum Baz {
+            BazVariant,
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let t = Baz$0::BazVariant;
+    let b = bar();
+}
+"#,
+            r#"
+use foo::{bar, bar::{Baz}};
+
+mod foo {
+    pub mod bar {
+        pub enum Baz {
+            BazVariant,
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let t = Baz::BazVariant;
+    let b = bar();
+}
 "#,
         );
     }

@@ -11,7 +11,7 @@ use ide_db::{
     assists::GroupLabel,
     defs::Definition,
     famous_defs::FamousDefs,
-    helpers::mod_path_to_ast,
+    helpers::{check_module_name_conflict, mod_path_to_ast},
     imports::insert_use::{ImportScope, insert_use},
     search::{FileReference, ReferenceCategory, SearchScope},
     source_change::SourceChangeBuilder,
@@ -217,12 +217,15 @@ pub(crate) fn extract_function(acc: &mut Assists, ctx: &AssistContext<'_>) -> Op
                         ctx.config.insert_use.prefix_kind,
                         cfg,
                     );
+                    let has_module_name_conflict =
+                        check_module_name_conflict(ctx.db(), ModuleDef::from(control_flow_enum));
 
                     if let Some(mod_path) = mod_path {
                         insert_use(
                             &scope,
                             mod_path_to_ast(&mod_path, edition),
                             &ctx.config.insert_use,
+                            has_module_name_conflict,
                         );
                     }
                 }

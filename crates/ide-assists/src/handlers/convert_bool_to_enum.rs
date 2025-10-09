@@ -5,7 +5,7 @@ use ide_db::{
     FxHashSet,
     assists::AssistId,
     defs::Definition,
-    helpers::mod_path_to_ast,
+    helpers::{check_module_name_conflict, mod_path_to_ast},
     imports::insert_use::{ImportScope, insert_use},
     search::{FileReference, UsageSearchResult},
     source_change::SourceChangeBuilder,
@@ -74,8 +74,8 @@ pub(crate) fn convert_bool_to_enum(acc: &mut Assists, ctx: &AssistContext<'_>) -
             add_enum_def(edit, ctx, &usages, target_node, &target_module);
             let mut delayed_mutations = Vec::new();
             replace_usages(edit, ctx, usages, definition, &target_module, &mut delayed_mutations);
-            for (scope, path) in delayed_mutations {
-                insert_use(&scope, path, &ctx.config.insert_use);
+            for (scope, path, has_module_name_conflict) in delayed_mutations {
+                insert_use(&scope, path, &ctx.config.insert_use, has_module_name_conflict);
             }
         },
     )
@@ -201,7 +201,7 @@ fn replace_usages(
     usages: UsageSearchResult,
     target_definition: Definition,
     target_module: &hir::Module,
-    delayed_mutations: &mut Vec<(ImportScope, ast::Path)>,
+    delayed_mutations: &mut Vec<(ImportScope, ast::Path, bool)>,
 ) {
     for (file_id, references) in usages {
         edit.edit_file(file_id.file_id(ctx.db()));
@@ -307,9 +307,9 @@ fn replace_usages(
                 }
 
                 // add imports across modules where needed
-                if let Some((scope, path)) = import_data {
+                if let Some((scope, path, has_module_name_conflict)) = import_data {
                     let scope = edit.make_import_scope_mut(scope);
-                    delayed_mutations.push((scope, path));
+                    delayed_mutations.push((scope, path, has_module_name_conflict));
                 }
             },
         )
@@ -319,7 +319,7 @@ fn replace_usages(
 struct FileReferenceWithImport {
     range: TextRange,
     name: ast::NameLike,
-    import_data: Option<(ImportScope, ast::Path)>,
+    import_data: Option<(ImportScope, ast::Path, bool)>,
 }
 
 fn augment_references_with_imports(
@@ -343,6 +343,8 @@ fn augment_references_with_imports(
             {
                 visited_modules.insert(ref_module);
 
+                let has_module_name_conflict =
+                    check_module_name_conflict(ctx.db(), ModuleDef::Module(*target_module));
                 ImportScope::find_insert_use_container(name.syntax(), &ctx.sema).and_then(
                     |import_scope| {
                         let cfg = ctx.config.find_path_config(
@@ -362,7 +364,7 @@ fn augment_references_with_imports(
                                 )
                             })?;
 
-                        Some((import_scope, path))
+                        Some((import_scope, path, has_module_name_conflict))
                     },
                 )
             } else {
@@ -1917,5 +1919,47 @@ fn main() {
     #[test]
     fn not_applicable_to_other_names() {
         check_assist_not_applicable(convert_bool_to_enum, "fn $0main() {}")
+    }
+
+    #[test]
+    fn import_with_module_name_conflict() {
+        check_assist(
+            convert_bool_to_enum,
+            r#"
+use foo::bar;
+
+mod foo {
+    pub mod bar {
+        pub const $0BOOL: bool = true;
+    }
+    pub fn bar() {}
+}
+
+fn main() {
+    if bar::BOOL {
+        bar();
+    }
+}
+"#,
+            r#"
+use foo::{bar, bar::{Bool}};
+
+mod foo {
+    pub mod bar {
+        #[derive(PartialEq, Eq)]
+        pub enum Bool { True, False }
+
+        pub const BOOL: Bool = Bool::True;
+    }
+    pub fn bar() {}
+}
+
+fn main() {
+    if bar::BOOL == Bool::True {
+        bar();
+    }
+}
+"#,
+        );
     }
 }

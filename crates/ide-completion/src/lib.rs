@@ -17,8 +17,10 @@ mod snippet;
 #[cfg(test)]
 mod tests;
 
+use hir::PathResolution;
 use ide_db::{
     FilePosition, FxHashSet, RootDatabase,
+    helpers::check_module_name_conflict,
     imports::insert_use::{self, ImportScope},
     syntax_helpers::tree_diff::diff,
     text_edit::TextEdit,
@@ -288,6 +290,7 @@ pub fn resolve_completion_edits(
         syntax::AstNode::syntax(&original_file).token_at_offset(offset).left_biased()?;
     let position_for_import = &original_token.parent()?;
     let scope = ImportScope::find_insert_use_container(position_for_import, &sema)?;
+    let sema_scope = sema.scope(position_for_import);
 
     let current_module = sema.scope(position_for_import)?.module();
     let current_crate = current_module.krate(db);
@@ -296,11 +299,16 @@ pub fn resolve_completion_edits(
     let mut import_insert = TextEdit::builder();
 
     imports.into_iter().for_each(|full_import_path| {
-        insert_use::insert_use(
-            &new_ast,
-            make::path_from_text_with_edition(&full_import_path, current_edition),
-            &config.insert_use,
-        );
+        let path = make::path_from_text_with_edition(&full_import_path, current_edition);
+
+        let resolved = sema_scope.as_ref().and_then(|scope| scope.speculative_resolve(&path));
+        let has_module_name_conflict = if let Some(PathResolution::Def(def)) = resolved {
+            check_module_name_conflict(db, def)
+        } else {
+            false
+        };
+
+        insert_use::insert_use(&new_ast, path, &config.insert_use, has_module_name_conflict);
     });
 
     diff(scope.as_syntax_node(), new_ast.as_syntax_node()).into_text_edit(&mut import_insert);
