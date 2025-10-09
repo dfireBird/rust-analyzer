@@ -142,8 +142,13 @@ impl ImportScope {
 }
 
 /// Insert an import path into the given file/node. A `merge` value of none indicates that no import merging is allowed to occur.
-pub fn insert_use(scope: &ImportScope, path: ast::Path, cfg: &InsertUseConfig) {
-    insert_use_with_alias_option(scope, path, cfg, None);
+pub fn insert_use(
+    scope: &ImportScope,
+    path: ast::Path,
+    cfg: &InsertUseConfig,
+    has_module_name_conflict: bool,
+) {
+    insert_use_with_alias_option(scope, path, cfg, None, has_module_name_conflict);
 }
 
 pub fn insert_use_as_alias(scope: &ImportScope, path: ast::Path, cfg: &InsertUseConfig) {
@@ -157,7 +162,7 @@ pub fn insert_use_as_alias(scope: &ImportScope, path: ast::Path, cfg: &InsertUse
         .expect("Failed to make ast node `Rename`");
     let alias = node.rename();
 
-    insert_use_with_alias_option(scope, path, cfg, alias);
+    insert_use_with_alias_option(scope, path, cfg, alias, false);
 }
 
 fn insert_use_with_alias_option(
@@ -165,6 +170,7 @@ fn insert_use_with_alias_option(
     path: ast::Path,
     cfg: &InsertUseConfig,
     alias: Option<ast::Rename>,
+    has_module_name_conflict: bool,
 ) {
     let _p = tracing::info_span!("insert_use_with_alias_option").entered();
     let mut mb = match cfg.granularity {

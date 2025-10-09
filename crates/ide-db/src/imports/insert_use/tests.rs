@@ -1357,7 +1357,7 @@ fn check_with_config(
         .find_map(ast::Path::cast)
         .unwrap();
 
-    insert_use(&file, path, config);
+    insert_use(&file, path, config, false);
     let result = file.as_syntax_node().ancestors().last().unwrap().to_string();
     assert_eq_text!(&trim_indent(ra_fixture_after), &result);
 }

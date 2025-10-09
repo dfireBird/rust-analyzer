@@ -91,6 +91,7 @@ fn try_merge_trees_mut(lhs: &ast::UseTree, rhs: &ast::UseTree, merge: MergeBehav
         let rhs_path = rhs.path()?;
 
         let (lhs_prefix, rhs_prefix) = common_prefix(&lhs_path, &rhs_path)?;
+        // let (lhs_prefix, rhs_prefix) = lhs_prefix.qualifier().zip(rhs_prefix.qualifier())?;
         if lhs.is_simple_path()
             && rhs.is_simple_path()
             && lhs_path == lhs_prefix

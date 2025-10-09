@@ -1,7 +1,7 @@
 use hir::AsAssocItem;
 use ide_db::{
-    helpers::mod_path_to_ast,
-    imports::insert_use::{ImportScope, insert_use},
+    helpers::{check_module_name_conflict, mod_path_to_ast},
+    imports::insert_use::{insert_use, ImportScope},
 };
 use syntax::{
     AstNode, Edition, SyntaxNode,
@@ -69,6 +69,7 @@ pub(crate) fn replace_qualified_name_with_use(
         })
         .flatten();
 
+    let has_module_name_conflict = check_module_name_conflict(ctx.db(), module);
     let scope = ImportScope::find_insert_use_container(original_path.syntax(), &ctx.sema)?;
     let target = original_path.syntax().text_range();
     acc.add(
@@ -92,7 +93,7 @@ pub(crate) fn replace_qualified_name_with_use(
                     Some(qualifier) => make::path_concat(qualifier, path),
                     None => path,
                 };
-            insert_use(&scope, path, &ctx.config.insert_use);
+            insert_use(&scope, path, &ctx.config.insert_use, has_module_name_conflict);
         },
     )
 }
@@ -451,5 +452,42 @@ fn main() {
 }
 ",
         );
+    }
+
+    #[test]
+    fn handle_module_name_conflicts() {
+        check_assist(replace_qualified_name_with_use, r#"
+use foo::bar;
+
+mod foo {
+    pub mod bar {
+        pub enum Baz {
+            BazVariant,
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let t = bar::Baz$0::BazVariant;
+    let b = bar();
+}"#, r#"
+use foo::{bar, bar::{Baz}};
+
+mod foo {
+    pub mod bar {
+        pub enum Baz {
+            BazVariant,
+        }
+    }
+
+    pub fn bar() {}
+}
+
+fn main() {
+    let t = Baz::BazVariant;
+    let b = bar();
+}"#);
     }
 }
