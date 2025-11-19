@@ -690,15 +690,23 @@ impl FunctionBody {
         match self {
             FunctionBody::Expr(expr) => walk_expr(expr, cb),
             FunctionBody::Span { parent, text_range, .. } => {
+                let mut let_else_blocks = Vec::new();
                 parent
                     .statements()
                     .filter(|stmt| text_range.contains_range(stmt.syntax().text_range()))
                     .filter_map(|stmt| match stmt {
                         ast::Stmt::ExprStmt(expr_stmt) => expr_stmt.expr(),
                         ast::Stmt::Item(_) => None,
-                        ast::Stmt::LetStmt(stmt) => stmt.initializer(),
+                        ast::Stmt::LetStmt(stmt) => {
+                            let_else_blocks.push(stmt.let_else().and_then(|le| le.block_expr()));
+                            stmt.initializer()
+                        }
                     })
                     .for_each(|expr| walk_expr(&expr, cb));
+                let_else_blocks
+                    .into_iter()
+                    .filter_map(std::convert::identity)
+                    .for_each(|block_expr| walk_expr(&ast::Expr::BlockExpr(block_expr), cb));
                 if let Some(expr) = parent
                     .tail_expr()
                     .filter(|it| text_range.contains_range(it.syntax().text_range()))
@@ -713,15 +721,23 @@ impl FunctionBody {
         match self {
             FunctionBody::Expr(expr) => preorder_expr(expr, cb),
             FunctionBody::Span { parent, text_range, .. } => {
+                let mut let_else_blocks = Vec::new();
                 parent
                     .statements()
                     .filter(|stmt| text_range.contains_range(stmt.syntax().text_range()))
                     .filter_map(|stmt| match stmt {
                         ast::Stmt::ExprStmt(expr_stmt) => expr_stmt.expr(),
                         ast::Stmt::Item(_) => None,
-                        ast::Stmt::LetStmt(stmt) => stmt.initializer(),
+                        ast::Stmt::LetStmt(stmt) => {
+                            let_else_blocks.push(stmt.let_else().and_then(|le| le.block_expr()));
+                            stmt.initializer()
+                        }
                     })
                     .for_each(|expr| preorder_expr(&expr, cb));
+                let_else_blocks
+                    .into_iter()
+                    .filter_map(std::convert::identity)
+                    .for_each(|block_expr| preorder_expr(&ast::Expr::BlockExpr(block_expr), cb));
                 if let Some(expr) = parent
                     .tail_expr()
                     .filter(|it| text_range.contains_range(it.syntax().text_range()))
@@ -6232,5 +6248,40 @@ fn $0fun_name(a: i32, b: i32) {
     fn in_right_brack_is_not_applicable() {
         cov_mark::check!(extract_function_in_braces_is_not_applicable);
         check_assist_not_applicable(extract_function, r"fn foo(arr: &mut $0[$0i32]) {}");
+    }
+
+    #[test]
+    fn no_parameter_for_variable_used_only_let_else() {
+        check_assist(
+            extract_function,
+            r#"
+fn foo() -> u32 {
+    let x = 5;
+
+    $0let Some(y) = Some(1) else {
+        return x * 2;
+    };$0
+
+    y
+}"#,
+            r#"
+fn foo() -> u32 {
+    let x = 5;
+
+    let y = match fun_name(x) {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
+
+    y
+}
+
+fn $0fun_name(x: u32) -> Result<u32, u32> {
+    let Some(y) = Some(1) else {
+        return Err(x * 2);
+    };
+    Ok(y)
+}"#,
+        );
     }
 }
