@@ -6,7 +6,10 @@ mod tests;
 use std::iter;
 
 use crate::expr_store::{
-    lower::{ExprCollector, generics::ImplTraitLowerFn},
+    lower::{
+        ExprCollector,
+        generics::{ImplTraitLowerFn, LifetimeElisionFn},
+    },
     path::NormalPath,
 };
 
@@ -39,6 +42,7 @@ pub(super) fn lower_path(
     collector: &mut ExprCollector<'_>,
     mut path: ast::Path,
     impl_trait_lower_fn: ImplTraitLowerFn<'_>,
+    lifetime_elision_fn: LifetimeElisionFn<'_>,
 ) -> Option<Path> {
     let mut kind = PathKind::Plain;
     let mut type_anchor = None;
@@ -89,12 +93,15 @@ pub(super) fn lower_path(
                 let name = name_ref.as_name();
                 let args = segment
                     .generic_arg_list()
-                    .and_then(|it| collector.lower_generic_args(it, impl_trait_lower_fn))
+                    .and_then(|it| {
+                        collector.lower_generic_args(it, impl_trait_lower_fn, lifetime_elision_fn)
+                    })
                     .or_else(|| {
                         collector.lower_generic_args_from_fn_path(
                             segment.parenthesized_arg_list(),
                             segment.ret_type(),
                             impl_trait_lower_fn,
+                            lifetime_elision_fn,
                         )
                     })
                     .or_else(|| {
@@ -112,7 +119,8 @@ pub(super) fn lower_path(
             ast::PathSegmentKind::Type { type_ref, trait_ref } => {
                 debug_assert!(path.qualifier().is_none()); // this can only occur at the first segment
 
-                let self_type = collector.lower_type_ref(type_ref?, impl_trait_lower_fn);
+                let self_type =
+                    collector.lower_type_ref(type_ref?, impl_trait_lower_fn, lifetime_elision_fn);
 
                 match trait_ref {
                     // <T>::foo
@@ -122,7 +130,11 @@ pub(super) fn lower_path(
                     }
                     // <T as Trait<A>>::Foo desugars to Trait<Self=T, A>::Foo
                     Some(trait_ref) => {
-                        let path = collector.lower_path(trait_ref.path()?, impl_trait_lower_fn)?;
+                        let path = collector.lower_path(
+                            trait_ref.path()?,
+                            impl_trait_lower_fn,
+                            lifetime_elision_fn,
+                        )?;
                         // FIXME: Unnecessary clone
                         collector.alloc_type_ref(
                             TypeRef::Path(path.clone()),
