@@ -121,6 +121,10 @@ impl Name {
         }
     }
 
+    pub fn anon_lifetime() -> Name {
+        Self::new_text("'_")
+    }
+
     pub fn new_symbol(symbol: Symbol, ctx: SyntaxContext) -> Self {
         debug_assert!(!symbol.as_str().starts_with("r#"));
         _ = ctx;

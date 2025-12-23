@@ -1011,11 +1011,18 @@ impl<'db> SourceAnalyzer<'db> {
 
         // FIXME: collectiong here shouldnt be necessary?
         let mut collector = ExprCollector::new(db, self.resolver.module(), self.file_id);
-        let hir_path =
-            collector.lower_path(path.clone(), &mut ExprCollector::impl_trait_error_allocator)?;
-        let parent_hir_path = path
-            .parent_path()
-            .and_then(|p| collector.lower_path(p, &mut ExprCollector::impl_trait_error_allocator));
+        let hir_path = collector.lower_path(
+            path.clone(),
+            &mut ExprCollector::impl_trait_error_allocator,
+            &mut ExprCollector::elided_lifetime_error_allocator,
+        )?;
+        let parent_hir_path = path.parent_path().and_then(|p| {
+            collector.lower_path(
+                p,
+                &mut ExprCollector::impl_trait_error_allocator,
+                &mut ExprCollector::elided_lifetime_error_allocator,
+            )
+        });
         let (store, _) = collector.store.finish();
 
         // Case where path is a qualifier of a use tree, e.g. foo::bar::{Baz, Qux} where we are
@@ -1219,8 +1226,11 @@ impl<'db> SourceAnalyzer<'db> {
         path: &ast::Path,
     ) -> Option<PathResolutionPerNs> {
         let mut collector = ExprCollector::new(db, self.resolver.module(), self.file_id);
-        let hir_path =
-            collector.lower_path(path.clone(), &mut ExprCollector::impl_trait_error_allocator)?;
+        let hir_path = collector.lower_path(
+            path.clone(),
+            &mut ExprCollector::impl_trait_error_allocator,
+            &mut ExprCollector::elided_lifetime_error_allocator,
+        )?;
         let (store, _) = collector.store.finish();
         Some(resolve_hir_path_(
             db,

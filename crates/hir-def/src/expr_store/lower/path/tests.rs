@@ -22,7 +22,11 @@ fn lower_path(path: ast::Path) -> (TestDB, ExpressionStore, Option<Path>) {
     let krate = db.fetch_test_crate();
     let mut ctx =
         ExprCollector::new(&db, crate_def_map(&db, krate).root_module_id(), file_id.into());
-    let lowered_path = ctx.lower_path(path, &mut ExprCollector::impl_trait_allocator);
+    let lowered_path = ctx.lower_path(
+        path,
+        &mut ExprCollector::impl_trait_allocator,
+        &mut ExprCollector::elided_lifetime_placeholder_allocator,
+    );
     let (store, _) = ctx.store.finish();
     (db, store, lowered_path)
 }
