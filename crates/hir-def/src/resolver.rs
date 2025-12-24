@@ -29,7 +29,7 @@ use crate::{
     },
     hir::{
         BindingId, ExprId, LabelId,
-        generics::{GenericParams, TypeOrConstParamData},
+        generics::{ElidedSource, GenericParams, TypeOrConstParamData},
     },
     item_scope::{BUILTIN_SCOPE, BuiltinShadowMode, ImportOrExternCrate, ItemScope},
     lang_item::LangItemTarget,
@@ -525,7 +525,29 @@ impl<'db> Resolver<'db> {
                 }
                 _ => None,
             }),
-            LifetimeRef::Placeholder | LifetimeRef::Error => None,
+            LifetimeRef::Placeholder => self.scopes().find_map(|scope| match scope {
+                Scope::GenericParams { def, params } => {
+                    let mut self_elided_lifetimes = Vec::new();
+                    let mut param_elided_liftimes = Vec::new();
+                    params.find_all_elided_lifetimes(*def).for_each(|(id, p)| {
+                        match p.elided_source {
+                            Some(ElidedSource::Self_) => self_elided_lifetimes.push(id),
+                            Some(ElidedSource::Param) => param_elided_liftimes.push(id),
+                            _ => (),
+                        }
+                    });
+
+                    if let Some(id) = self_elided_lifetimes.first() {
+                        Some(LifetimeNs::LifetimeParam(*id))
+                    } else if param_elided_liftimes.len() == 1 {
+                        param_elided_liftimes.first().map(|id| LifetimeNs::LifetimeParam(*id))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }),
+            LifetimeRef::Error => None,
             LifetimeRef::Param(lifetime_param_id) => {
                 Some(LifetimeNs::LifetimeParam(*lifetime_param_id))
             }

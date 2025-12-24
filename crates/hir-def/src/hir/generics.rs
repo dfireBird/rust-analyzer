@@ -33,6 +33,13 @@ pub struct TypeParamData {
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct LifetimeParamData {
     pub name: Name,
+    pub elided_source: Option<ElidedSource>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub enum ElidedSource {
+    Self_,
+    Param,
 }
 
 /// Data about a generic const parameter (to a function, struct, impl, ...).
@@ -370,5 +377,15 @@ impl GenericParams {
         self.lifetimes.iter().find_map(|(id, p)| {
             if &p.name == name { Some(LifetimeParamId { local_id: id, parent }) } else { None }
         })
+    }
+
+    pub fn find_all_elided_lifetimes(
+        &self,
+        parent: GenericDefId,
+    ) -> impl Iterator<Item = (LifetimeParamId, &LifetimeParamData)> {
+        self.lifetimes
+            .iter()
+            .filter(|(_, p)| p.name == Name::anon_lifetime())
+            .map(move |(id, p)| (LifetimeParamId { parent, local_id: id }, p))
     }
 }

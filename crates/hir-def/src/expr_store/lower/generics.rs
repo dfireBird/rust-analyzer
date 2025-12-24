@@ -14,8 +14,8 @@ use crate::{
     GenericDefId, LifetimeParamId, TypeOrConstParamId, TypeParamId,
     expr_store::{TypePtr, lower::ExprCollector},
     hir::generics::{
-        ConstParamData, GenericParams, LifetimeParamData, TypeOrConstParamData, TypeParamData,
-        TypeParamProvenance, WherePredicate,
+        ConstParamData, ElidedSource, GenericParams, LifetimeParamData, TypeOrConstParamData,
+        TypeParamData, TypeParamProvenance, WherePredicate,
     },
     type_ref::{LifetimeRef, LifetimeRefId, TypeBound, TypeRef, TypeRefId},
 };
@@ -156,7 +156,7 @@ impl GenericParamsCollector {
                 ast::GenericParam::LifetimeParam(lifetime_param) => {
                     let lifetime = ec.lower_lifetime_ref_opt(lifetime_param.lifetime());
                     if let LifetimeRef::Named(name) = &ec.store.lifetimes[lifetime] {
-                        let param = LifetimeParamData { name: name.clone() };
+                        let param = LifetimeParamData { name: name.clone(), elided_source: None };
                         let _idx = self.lifetimes.alloc(param);
                         self.lower_bounds(
                             ec,
@@ -280,7 +280,12 @@ impl GenericParamsCollector {
         parent: GenericDefId,
     ) -> impl for<'ec, 'db> FnMut(&'ec mut ExprCollector<'db>) -> LifetimeRefId {
         move |ec| {
-            let lifetime = LifetimeParamData { name: Name::anon_lifetime() };
+            let elided_source = Some(if ec.is_lowering_self_param {
+                ElidedSource::Self_
+            } else {
+                ElidedSource::Param
+            });
+            let lifetime = LifetimeParamData { name: Name::anon_lifetime(), elided_source };
             let param_id = LifetimeParamId { parent, local_id: lifetimes.alloc(lifetime) };
             ec.alloc_lifetime_ref_desugared(LifetimeRef::Param(param_id))
         }

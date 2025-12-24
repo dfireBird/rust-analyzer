@@ -342,11 +342,13 @@ pub(crate) fn lower_function(
                     if enabled {
                         has_self_param = true;
                         params.push(match param.ty() {
-                            Some(ty) => collector.lower_type_ref(
-                                ty,
-                                &mut impl_trait_lower_fn,
-                                &mut lifetime_elision_fn,
-                            ),
+                            Some(ty) => collector.with_self_param_lower(|this| {
+                                this.lower_type_ref(
+                                    ty,
+                                    &mut impl_trait_lower_fn,
+                                    &mut lifetime_elision_fn,
+                                )
+                            }),
                             None => {
                                 let self_type = collector.alloc_type_ref_desugared(TypeRef::Path(
                                     Name::new_symbol_root(sym::Self_).into(),
@@ -461,6 +463,8 @@ pub struct ExprCollector<'db> {
     outer_impl_trait: bool,
 
     is_lowering_coroutine: bool,
+
+    is_lowering_self_param: bool,
 
     /// Legacy (`macro_rules!`) macros can have multiple definitions and shadow each other,
     /// and we need to find the current definition. So we track the number of definitions we saw.
@@ -599,6 +603,7 @@ impl<'db> ExprCollector<'db> {
             awaitable_context: None,
             current_block_legacy_macro_defs_count: FxHashMap::default(),
             outer_impl_trait: false,
+            is_lowering_self_param: false,
             krate,
             name_generator_index: 0,
         }
@@ -876,6 +881,13 @@ impl<'db> ExprCollector<'db> {
         let old = mem::replace(&mut self.outer_impl_trait, impl_trait);
         let result = f(self);
         self.outer_impl_trait = old;
+        result
+    }
+
+    fn with_self_param_lower<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let old = mem::replace(&mut self.is_lowering_self_param, true);
+        let result = f(self);
+        self.is_lowering_self_param = old;
         result
     }
 
