@@ -29,6 +29,7 @@ use crate::{
     hir::{
         Array, AsmOperand, Binding, BindingId, Expr, ExprId, ExprOrPatId, Label, LabelId, Pat,
         PatId, RecordFieldPat, RecordSpread, Statement,
+        generics::{LifetimeParamData, LocalLifetimeParamId},
     },
     nameres::{DefMap, block_def_map},
     signatures::VariantFields,
@@ -137,6 +138,7 @@ pub struct ExpressionStore {
     expr_only: Option<Box<ExpressionOnlyStore>>,
     pub types: Arena<TypeRef>,
     pub lifetimes: Arena<LifetimeRef>,
+    pub hrtb_lifetimes: Arena<LifetimeParamData>,
 }
 
 #[derive(Debug, Eq, Default)]
@@ -216,6 +218,13 @@ pub struct ExpressionStoreSourceMap {
         reason = "this is here for completeness, and maybe we'll need it in the future"
     )]
     lifetime_map: FxHashMap<LifetimeSource, LifetimeRefId>,
+
+    hrtb_lifetime_map_back: ArenaMap<LocalLifetimeParamId, LifetimeSource>,
+    #[expect(
+        unused,
+        reason = "this is here for completeness, and maybe we'll need it in the future"
+    )]
+    hrtb_lifetime_map: FxHashMap<LifetimeSource, LocalLifetimeParamId>,
 }
 
 impl PartialEq for ExpressionStoreSourceMap {
@@ -223,11 +232,19 @@ impl PartialEq for ExpressionStoreSourceMap {
         // we only need to compare one of the two mappings
         // as the other is a reverse mapping and thus will compare
         // the same as normal mapping
-        let Self { expr_only, types_map_back, types_map: _, lifetime_map_back, lifetime_map: _ } =
-            self;
+        let Self {
+            expr_only,
+            types_map_back,
+            types_map: _,
+            lifetime_map_back,
+            lifetime_map: _,
+            hrtb_lifetime_map_back,
+            hrtb_lifetime_map: _,
+        } = self;
         *expr_only == other.expr_only
             && *types_map_back == other.types_map_back
             && *lifetime_map_back == other.lifetime_map_back
+            && *hrtb_lifetime_map_back == other.hrtb_lifetime_map_back
     }
 }
 
@@ -239,6 +256,7 @@ pub struct ExpressionStoreBuilder {
     pub bindings: Arena<Binding>,
     pub labels: Arena<Label>,
     pub lifetimes: Arena<LifetimeRef>,
+    pub hrtb_lifetimes: Arena<LifetimeParamData>,
     pub binding_owners: FxHashMap<BindingId, ExprId>,
     pub types: Arena<TypeRef>,
     block_scopes: Vec<BlockId>,
@@ -261,6 +279,9 @@ pub struct ExpressionStoreBuilder {
 
     lifetime_map_back: ArenaMap<LifetimeRefId, LifetimeSource>,
     lifetime_map: FxHashMap<LifetimeSource, LifetimeRefId>,
+
+    hrtb_lifetime_map_back: ArenaMap<LocalLifetimeParamId, LifetimeSource>,
+    hrtb_lifetime_map: FxHashMap<LifetimeSource, LocalLifetimeParamId>,
 
     binding_definitions:
         ArenaMap<BindingId, SmallVec<[PatId; 2 * size_of::<usize>() / size_of::<PatId>()]>>,
@@ -318,6 +339,7 @@ impl ExpressionStoreBuilder {
             inference_roots: mut expr_roots,
             mut types,
             mut lifetimes,
+            mut hrtb_lifetimes,
 
             mut expr_map,
             mut expr_map_back,
@@ -329,6 +351,8 @@ impl ExpressionStoreBuilder {
             mut types_map,
             mut lifetime_map_back,
             mut lifetime_map,
+            mut hrtb_lifetime_map,
+            mut hrtb_lifetime_map_back,
             mut binding_definitions,
             mut field_map_back,
             mut pat_field_map_back,
@@ -344,6 +368,7 @@ impl ExpressionStoreBuilder {
         ident_hygiene.shrink_to_fit();
         types.shrink_to_fit();
         lifetimes.shrink_to_fit();
+        hrtb_lifetimes.shrink_to_fit();
 
         expr_map.shrink_to_fit();
         expr_map_back.shrink_to_fit();
@@ -355,6 +380,8 @@ impl ExpressionStoreBuilder {
         types_map.shrink_to_fit();
         lifetime_map_back.shrink_to_fit();
         lifetime_map.shrink_to_fit();
+        hrtb_lifetime_map_back.shrink_to_fit();
+        hrtb_lifetime_map.shrink_to_fit();
         binding_definitions.shrink_to_fit();
         field_map_back.shrink_to_fit();
         pat_field_map_back.shrink_to_fit();
@@ -391,7 +418,7 @@ impl ExpressionStoreBuilder {
             } else {
                 None
             };
-            ExpressionStore { expr_only, types, lifetimes }
+            ExpressionStore { expr_only, types, lifetimes, hrtb_lifetimes }
         };
 
         let source_map = {
@@ -419,6 +446,8 @@ impl ExpressionStoreBuilder {
                 types_map,
                 lifetime_map_back,
                 lifetime_map,
+                hrtb_lifetime_map_back,
+                hrtb_lifetime_map,
             }
         };
 

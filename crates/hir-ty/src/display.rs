@@ -30,7 +30,6 @@ use hir_def::{
 };
 use hir_expand::{mod_path::PathKind, name::Name};
 use intern::{Internable, Interned, sym};
-use itertools::Itertools;
 use la_arena::ArenaMap;
 use rustc_apfloat::{
     Float,
@@ -2148,6 +2147,14 @@ impl<'db> HirDisplayWithExpressionStore<'db> for LifetimeRefId {
                     generic_params[lifetime_param_id.local_id].name.display(f.db, f.edition())
                 )
             }
+            &LifetimeRef::HrtbParam(hrtb_lt_param_id) => {
+                let store = ExpressionStore::of(f.db, hrtb_lt_param_id.owner_id);
+                write!(
+                    f,
+                    "{}",
+                    store.hrtb_lifetimes[hrtb_lt_param_id.local_id].name.display(f.db, f.edition())
+                )
+            }
         }
     }
 }
@@ -2299,11 +2306,18 @@ impl<'db> HirDisplayWithExpressionStore<'db> for TypeBound {
             TypeBound::Lifetime(lifetime) => lifetime.hir_fmt(f, store),
             TypeBound::ForLifetime(lifetimes, path) => {
                 let edition = f.edition();
-                write!(
-                    f,
-                    "for<{}> ",
-                    lifetimes.iter().map(|it| it.display(f.db, edition)).format(", ")
-                )?;
+                let mut first = true;
+                for &lifetime in lifetimes {
+                    if !mem::take(&mut first) {
+                        write!(f, ", ")?;
+                    }
+                    write!(
+                        f,
+                        "{}",
+                        store.hrtb_lifetimes[lifetime.local_id].name.display(f.db, edition)
+                    )?;
+                }
+                write!(f, "> ")?;
                 store[*path].hir_fmt(f, store)
             }
             TypeBound::Use(args) => {

@@ -1120,7 +1120,7 @@ impl<'db> SourceAnalyzer<'db> {
         }
 
         // FIXME: collectiong here shouldnt be necessary?
-        let mut collector = ExprCollector::body(db, self.resolver.module(), self.file_id);
+        let mut collector = ExprCollector::body(db, self.resolver.module(), self.file_id, None);
         let hir_path = collector.lower_path(
             path.clone(),
             &mut ExprCollector::impl_trait_error_allocator,
@@ -1335,7 +1335,7 @@ impl<'db> SourceAnalyzer<'db> {
         db: &dyn HirDatabase,
         path: &ast::Path,
     ) -> Option<PathResolutionPerNs> {
-        let mut collector = ExprCollector::body(db, self.resolver.module(), self.file_id);
+        let mut collector = ExprCollector::body(db, self.resolver.module(), self.file_id, None);
         let hir_path = collector.lower_path(
             path.clone(),
             &mut ExprCollector::impl_trait_error_allocator,

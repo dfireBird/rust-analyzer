@@ -637,6 +637,12 @@ pub struct LifetimeParamId {
     pub local_id: LocalLifetimeParamId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HrtbLifetimeParamId {
+    pub owner_id: ExpressionStoreOwnerId,
+    pub local_id: LocalLifetimeParamId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa_macros::Supertype)]
 pub enum ItemContainerId {
     ExternBlockId(ExternBlockId),
@@ -1313,6 +1319,21 @@ impl ModuleDefId {
             ModuleDefId::MacroId(id) => id.module(db),
             ModuleDefId::BuiltinType(_) => return None,
         })
+    }
+
+    /// Converts this `ModuleDefId` into a `GenericDefId` if possible.
+    ///
+    /// Returns `None` for variants, modules, builtin types, and macros.
+    pub fn as_generic_def_id(self) -> Option<GenericDefId> {
+        match self {
+            ModuleDefId::FunctionId(id) => Some(id.into()),
+            ModuleDefId::AdtId(id) => Some(id.into()),
+            ModuleDefId::ConstId(id) => Some(id.into()),
+            ModuleDefId::StaticId(id) => Some(id.into()),
+            ModuleDefId::TraitId(id) => Some(id.into()),
+            ModuleDefId::TypeAliasId(id) => Some(id.into()),
+            _ => None,
+        }
     }
 }
 /// Helper wrapper for `AstId` with `ModPath`

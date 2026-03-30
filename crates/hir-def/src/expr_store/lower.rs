@@ -14,6 +14,7 @@ use either::Either;
 use generics::LifetimeElisionFn;
 use hir_expand::{
     HirFileId, InFile, MacroDefId,
+    mod_path::ModPath,
     name::{AsName, Name},
     span_map::SpanMapRef,
 };
@@ -33,8 +34,9 @@ use thin_vec::ThinVec;
 use tt::TextRange;
 
 use crate::{
-    AdtId, BlockId, BlockLoc, DefWithBodyId, FunctionId, GenericDefId, ImplId, ItemContainerId,
-    MacroId, ModuleDefId, ModuleId, TraitId, TypeAliasId, UnresolvedMacro,
+    AdtId, BlockId, BlockLoc, DefWithBodyId, ExpressionStoreOwnerId, FunctionId, GenericDefId,
+    HrtbLifetimeParamId, ImplId, ItemContainerId, MacroId, ModuleDefId, ModuleId, TraitId,
+    TypeAliasId, UnresolvedMacro,
     attrs::AttrFlags,
     db::DefDatabase,
     expr_store::{
@@ -48,7 +50,8 @@ use crate::{
     hir::{
         Array, Binding, BindingAnnotation, BindingId, BindingProblems, CaptureBy, ClosureKind,
         Expr, ExprId, Item, Label, LabelId, Literal, MatchArm, Movability, OffsetOf, Pat, PatId,
-        RecordFieldPat, RecordLitField, RecordSpread, Statement, generics::GenericParams,
+        RecordFieldPat, RecordLitField, RecordSpread, Statement,
+        generics::{ElidedSource, GenericParams, LifetimeParamData, LocalLifetimeParamId},
     },
     item_scope::BuiltinShadowMode,
     item_tree::FieldsShape,
@@ -81,7 +84,7 @@ pub(super) fn lower_body(
     let mut self_param = None;
     let mut source_map_self_param = None;
     let mut params = vec![];
-    let mut collector = ExprCollector::body(db, module, current_file_id);
+    let mut collector = ExprCollector::body(db, module, current_file_id, Some(owner.into()));
 
     let skip_body = AttrFlags::query(
         db,
@@ -190,7 +193,7 @@ pub(crate) fn lower_type_ref(
     module: ModuleId,
     type_ref: InFile<Option<ast::Type>>,
 ) -> (ExpressionStore, ExpressionStoreSourceMap, TypeRefId) {
-    let mut expr_collector = ExprCollector::signature(db, module, type_ref.file_id);
+    let mut expr_collector = ExprCollector::signature(db, module, type_ref.file_id, None);
     let type_ref = expr_collector.lower_type_ref_opt(
         type_ref.value,
         &mut ExprCollector::impl_trait_allocator,
@@ -208,7 +211,7 @@ pub(crate) fn lower_generic_params(
     param_list: Option<ast::GenericParamList>,
     where_clause: Option<ast::WhereClause>,
 ) -> (ExpressionStore, GenericParams, ExpressionStoreSourceMap) {
-    let mut expr_collector = ExprCollector::signature(db, module, file_id);
+    let mut expr_collector = ExprCollector::signature(db, module, file_id, Some(def.into()));
     let mut collector = generics::GenericParamsCollector::new(def);
     collector.lower(&mut expr_collector, param_list, where_clause);
     let params = collector.finish();
@@ -222,7 +225,9 @@ pub(crate) fn lower_impl(
     impl_syntax: InFile<ast::Impl>,
     impl_id: ImplId,
 ) -> (ExpressionStore, ExpressionStoreSourceMap, TypeRefId, Option<TraitRef>, GenericParams) {
-    let mut expr_collector = ExprCollector::signature(db, module, impl_syntax.file_id);
+    let def: GenericDefId = impl_id.into();
+    let mut expr_collector =
+        ExprCollector::signature(db, module, impl_syntax.file_id, Some(def.into()));
     let mut collector = generics::GenericParamsCollector::new(impl_id.into());
     collector.lower(
         &mut expr_collector,
@@ -255,7 +260,9 @@ pub(crate) fn lower_trait(
     trait_syntax: InFile<ast::Trait>,
     trait_id: TraitId,
 ) -> (ExpressionStore, ExpressionStoreSourceMap, GenericParams) {
-    let mut expr_collector = ExprCollector::signature(db, module, trait_syntax.file_id);
+    let def: GenericDefId = trait_id.into();
+    let mut expr_collector =
+        ExprCollector::signature(db, module, trait_syntax.file_id, Some(def.into()));
     let mut collector = generics::GenericParamsCollector::with_self_param(
         &mut expr_collector,
         trait_id.into(),
@@ -278,7 +285,8 @@ pub(crate) fn lower_type_alias(
     type_alias_id: TypeAliasId,
 ) -> (ExpressionStore, ExpressionStoreSourceMap, GenericParams, Box<[TypeBound]>, Option<TypeRefId>)
 {
-    let mut expr_collector = ExprCollector::signature(db, module, alias.file_id);
+    let def: GenericDefId = type_alias_id.into();
+    let mut expr_collector = ExprCollector::signature(db, module, alias.file_id, Some(def.into()));
     let bounds = alias
         .value
         .type_bound_list()
@@ -327,7 +335,8 @@ pub(crate) fn lower_function(
     bool,
     bool,
 ) {
-    let mut expr_collector = ExprCollector::signature(db, module, fn_.file_id);
+    let def: GenericDefId = function_id.into();
+    let mut expr_collector = ExprCollector::signature(db, module, fn_.file_id, Some(def.into()));
     let mut collector = generics::GenericParamsCollector::new(function_id.into());
     collector.lower(&mut expr_collector, fn_.value.generic_param_list(), fn_.value.where_clause());
     let mut params = vec![];
@@ -342,7 +351,7 @@ pub(crate) fn lower_function(
                     if enabled {
                         has_self_param = true;
                         params.push(match param.ty() {
-                            Some(ty) => collector.with_self_param_lower(|this| {
+                            Some(ty) => collector.with_self_lt_elision(|this| {
                                 this.lower_type_ref(
                                     ty,
                                     &mut impl_trait_lower_fn,
@@ -353,9 +362,18 @@ pub(crate) fn lower_function(
                                 let self_type = collector.alloc_type_ref_desugared(TypeRef::Path(
                                     Name::new_symbol_root(sym::Self_).into(),
                                 ));
-                                let lifetime = param
-                                    .lifetime()
-                                    .map(|lifetime| collector.lower_lifetime_ref(lifetime));
+                                let lifetime = collector.with_self_lt_elision(|this| {
+                                    let lt = param.lifetime().map(|lifetime| {
+                                        this.lower_lifetime_ref(lifetime, lifetime_elision_fn)
+                                    });
+                                    match lt {
+                                        None if matches!(param.kind(), ast::SelfParamKind::Ref) => {
+                                            Some(lifetime_elision_fn(this))
+                                        }
+                                        _ => lt,
+                                    }
+                                });
+
                                 match param.kind() {
                                     ast::SelfParamKind::Owned => self_type,
                                     ast::SelfParamKind::Ref => collector.alloc_type_ref_desugared(
@@ -389,13 +407,15 @@ pub(crate) fn lower_function(
                     .map(|param| param.ty())
                     // FIXME
                     .collect::<Vec<_>>();
-                for p in p {
-                    params.push(collector.lower_type_ref_opt(
-                        p,
-                        &mut impl_trait_lower_fn,
-                        &mut lifetime_elision_fn,
-                    ));
-                }
+                collector.with_param_lt_elision(|this| {
+                    for p in p {
+                        params.push(this.lower_type_ref_opt(
+                            p,
+                            &mut impl_trait_lower_fn,
+                            &mut lifetime_elision_fn,
+                        ));
+                    }
+                })
             }
         },
     );
@@ -464,7 +484,10 @@ pub struct ExprCollector<'db> {
 
     is_lowering_coroutine: bool,
 
-    is_lowering_self_param: bool,
+    elision_context: Option<ElidedSource>,
+
+    type_bound_source: TypeBoundSource,
+    type_bound_binder: ThinVec<HrtbLifetimeParamId>,
 
     /// Legacy (`macro_rules!`) macros can have multiple definitions and shadow each other,
     /// and we need to find the current definition. So we track the number of definitions we saw.
@@ -479,6 +502,8 @@ pub struct ExprCollector<'db> {
     krate: base_db::Crate,
 
     name_generator_index: usize,
+
+    owner_id: Option<ExpressionStoreOwnerId>,
 }
 
 #[derive(Clone, Debug)]
@@ -565,6 +590,12 @@ impl BindingList {
     }
 }
 
+#[derive(Debug)]
+enum TypeBoundSource {
+    Parent,
+    ForBinder,
+}
+
 impl<'db> ExprCollector<'db> {
     /// Creates a collector for a signature store, this will populate `const_expr_origins` to any
     /// top level const arg roots.
@@ -572,9 +603,11 @@ impl<'db> ExprCollector<'db> {
         db: &dyn DefDatabase,
         module: ModuleId,
         current_file_id: HirFileId,
+        owner: Option<ExpressionStoreOwnerId>,
     ) -> ExprCollector<'_> {
-        let mut this = Self::body(db, module, current_file_id);
+        let mut this = Self::body(db, module, current_file_id, None);
         this.store.inference_roots = Some(Default::default());
+        this.owner_id = owner;
         this
     }
 
@@ -583,6 +616,7 @@ impl<'db> ExprCollector<'db> {
         db: &dyn DefDatabase,
         module: ModuleId,
         current_file_id: HirFileId,
+        owner: Option<ExpressionStoreOwnerId>,
     ) -> ExprCollector<'_> {
         let (def_map, local_def_map) = module.local_def_map(db);
         let expander = Expander::new(db, current_file_id, def_map);
@@ -603,9 +637,12 @@ impl<'db> ExprCollector<'db> {
             awaitable_context: None,
             current_block_legacy_macro_defs_count: FxHashMap::default(),
             outer_impl_trait: false,
-            is_lowering_self_param: false,
+            elision_context: None,
+            type_bound_source: TypeBoundSource::Parent,
+            type_bound_binder: ThinVec::new(),
             krate,
             name_generator_index: 0,
+            owner_id: owner.map(Into::into),
         }
     }
 
@@ -625,14 +662,29 @@ impl<'db> ExprCollector<'db> {
         self.expander.span_map()
     }
 
+    pub(in crate::expr_store) fn lower_hrtb_lifetime_param(
+        &mut self,
+        lifetime: ast::Lifetime,
+    ) -> HrtbLifetimeParamId {
+        // FIXME: Introduce an error variant, so any 'static or '_ will be errors
+        let param_data = LifetimeParamData {
+            name: Name::new_lifetime(&*lifetime.text()),
+            elided_source: self.elision_context.clone(),
+        };
+        let local_id = self.alloc_hrtb_lifetime_param(param_data, AstPtr::new(&lifetime));
+        HrtbLifetimeParamId { owner_id: self.owner_id.unwrap(), local_id }
+    }
+
     pub(in crate::expr_store) fn lower_lifetime_ref(
         &mut self,
         lifetime: ast::Lifetime,
+        lifetime_elision_fn: LifetimeElisionFn<'_>,
     ) -> LifetimeRefId {
         // FIXME: Keyword check?
         let lifetime_ref = match &*lifetime.text() {
             "" | "'" => LifetimeRef::Error,
             "'static" => LifetimeRef::Static,
+            "'_" if self.elision_context.is_some() => return lifetime_elision_fn(self),
             "'_" => LifetimeRef::Placeholder,
             text => LifetimeRef::Named(Name::new_lifetime(text)),
         };
@@ -642,9 +694,10 @@ impl<'db> ExprCollector<'db> {
     pub(in crate::expr_store) fn lower_lifetime_ref_opt(
         &mut self,
         lifetime: Option<ast::Lifetime>,
+        lifetime_elision_fn: LifetimeElisionFn<'_>,
     ) -> LifetimeRefId {
         match lifetime {
-            Some(lifetime) => self.lower_lifetime_ref(lifetime),
+            Some(lifetime) => self.lower_lifetime_ref(lifetime, lifetime_elision_fn),
             None => self.alloc_lifetime_ref_desugared(LifetimeRef::Placeholder),
         }
     }
@@ -704,7 +757,7 @@ impl<'db> ExprCollector<'db> {
                 let inner_ty =
                     self.lower_type_ref_opt(inner.ty(), impl_trait_lower_fn, lifetime_elision_fn);
                 let lifetime = if let Some(lt) = inner.lifetime() {
-                    Some(self.lower_lifetime_ref(lt))
+                    Some(self.lower_lifetime_ref(lt, lifetime_elision_fn))
                 } else {
                     Some(lifetime_elision_fn(self))
                 };
@@ -852,12 +905,35 @@ impl<'db> ExprCollector<'db> {
         id
     }
 
+    fn alloc_hrtb_lifetime_param(
+        &mut self,
+        hrtb_lifetime: LifetimeParamData,
+        node: LifetimePtr,
+    ) -> LocalLifetimeParamId {
+        let id = self.store.hrtb_lifetimes.alloc(hrtb_lifetime);
+        let ptr = self.expander.in_file(node);
+        self.store.hrtb_lifetime_map_back.insert(id, ptr);
+        self.store.hrtb_lifetime_map.insert(ptr, id);
+        id
+    }
+
     fn alloc_type_ref_desugared(&mut self, type_ref: TypeRef) -> TypeRefId {
         self.store.types.alloc(type_ref)
     }
 
     fn alloc_lifetime_ref_desugared(&mut self, lifetime_ref: LifetimeRef) -> LifetimeRefId {
         self.store.lifetimes.alloc(lifetime_ref)
+    }
+
+    fn alloc_hrtb_lifetime_param_desugared(
+        &mut self,
+        hrtb_lifetime: LifetimeParamData,
+    ) -> LocalLifetimeParamId {
+        self.store.hrtb_lifetimes.alloc(hrtb_lifetime)
+    }
+
+    fn push_lifetime_in_type_bound_binder(&mut self, param_id: HrtbLifetimeParamId) {
+        self.type_bound_binder.push(param_id);
     }
 
     fn alloc_error_type(&mut self) -> TypeRefId {
@@ -884,10 +960,44 @@ impl<'db> ExprCollector<'db> {
         result
     }
 
-    fn with_self_param_lower<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        let old = mem::replace(&mut self.is_lowering_self_param, true);
+    fn with_type_bound_source<R>(
+        &mut self,
+        source: TypeBoundSource,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let old = mem::replace(&mut self.type_bound_source, source);
         let result = f(self);
-        self.is_lowering_self_param = old;
+        self.type_bound_source = old;
+        result
+    }
+
+    fn with_type_bound_binder<R>(
+        &mut self,
+        binder: ThinVec<HrtbLifetimeParamId>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> (R, ThinVec<HrtbLifetimeParamId>) {
+        let old = mem::replace(&mut self.type_bound_binder, binder);
+        let result = f(self);
+        let binder = mem::replace(&mut self.type_bound_binder, old);
+        (result, binder)
+    }
+
+    fn with_self_lt_elision<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.with_elision_context(f, ElidedSource::Self_)
+    }
+
+    fn with_param_lt_elision<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.with_elision_context(f, ElidedSource::Param)
+    }
+
+    fn with_elision_context<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> R,
+        elision_context: ElidedSource,
+    ) -> R {
+        let old = mem::replace(&mut self.elision_context, Some(elision_context));
+        let result = f(self);
+        self.elision_context = old;
         result
     }
 
@@ -1034,7 +1144,7 @@ impl<'db> ExprCollector<'db> {
                 }
                 ast::GenericArg::LifetimeArg(lifetime_arg) => {
                     if let Some(lifetime) = lifetime_arg.lifetime() {
-                        let lifetime_ref = self.lower_lifetime_ref(lifetime);
+                        let lifetime_ref = self.lower_lifetime_ref(lifetime, lifetime_elision_fn);
                         args.push(GenericArg::Lifetime(lifetime_ref))
                     }
                 }
@@ -1152,7 +1262,7 @@ impl<'db> ExprCollector<'db> {
                 let binder = match binder.and_then(|it| it.generic_param_list()) {
                     Some(gpl) => gpl
                         .lifetime_params()
-                        .flat_map(|lp| lp.lifetime().map(|lt| Name::new_lifetime(&lt.text())))
+                        .flat_map(|lp| lp.lifetime().map(|lt| self.lower_hrtb_lifetime_param(lt)))
                         .collect(),
                     None => ThinVec::default(),
                 };
@@ -1160,7 +1270,12 @@ impl<'db> ExprCollector<'db> {
                     Some(_) => TraitBoundModifier::Maybe,
                     None => TraitBoundModifier::None,
                 };
-                self.lower_path_type(&path_type, impl_trait_lower_fn, lifetime_elision_fn)
+
+                let (opt_p, binder) = self.with_type_bound_binder(binder, |this| {
+                    this.lower_path_type(&path_type, impl_trait_lower_fn, lifetime_elision_fn)
+                });
+
+                opt_p
                     .map(|p| {
                         let path = self.alloc_path(p, AstPtr::new(&path_type).upcast());
                         if binder.is_empty() {
@@ -1175,14 +1290,14 @@ impl<'db> ExprCollector<'db> {
                 gal.use_bound_generic_args()
                     .map(|p| match p {
                         ast::UseBoundGenericArg::Lifetime(l) => {
-                            UseArgRef::Lifetime(self.lower_lifetime_ref(l))
+                            UseArgRef::Lifetime(self.lower_lifetime_ref(l, lifetime_elision_fn))
                         }
                         ast::UseBoundGenericArg::NameRef(n) => UseArgRef::Name(n.as_name()),
                     })
                     .collect(),
             ),
             ast::TypeBoundKind::Lifetime(lifetime) => {
-                TypeBound::Lifetime(self.lower_lifetime_ref(lifetime))
+                TypeBound::Lifetime(self.lower_lifetime_ref(lifetime, lifetime_elision_fn))
             }
         }
     }
@@ -3001,6 +3116,72 @@ impl<'db> ExprCollector<'db> {
         relative_name: Symbol,
     ) -> Expr {
         self.ty_rel_lang_path(lang, relative_name).map_or(Expr::Missing, Expr::Path)
+    }
+
+    pub(crate) fn collect_path_elided_liftetimes(
+        &mut self,
+        path: ast::Path,
+        args: Option<GenericArgs>,
+        lifetime_elision_fn: LifetimeElisionFn<'_>,
+    ) -> Option<GenericArgs> {
+        let num_lifetime_args = args
+            .as_ref()
+            .map(|args| {
+                args.args.iter().filter(|arg| matches!(arg, GenericArg::Lifetime(..))).count()
+            })
+            .unwrap_or_default();
+
+        let mod_path = ModPath::from_src(self.db, path.clone(), &mut |range| {
+            self.span_map().span_for_range(range).ctx
+        });
+
+        let path_res = mod_path.map(|mod_path| {
+            self.def_map.resolve_path(
+                self.local_def_map,
+                self.db,
+                self.module,
+                &mod_path,
+                BuiltinShadowMode::Module,
+                None,
+            )
+        });
+
+        let def = path_res
+            .and_then(|(per_ns, _)| per_ns.types)
+            .and_then(|item| item.def.as_generic_def_id());
+
+        let num_lifetime_params =
+            def.map(|def| GenericParams::of(self.db, def).len_lifetimes()).unwrap_or_default();
+
+        let mut elided_args = Vec::new();
+        if num_lifetime_args == 0 {
+            // lifetime args does not exist in source
+            // call elided function for all lifetime params
+            for _ in 0..num_lifetime_params {
+                let lt_id = lifetime_elision_fn(self);
+                elided_args.push(GenericArg::Lifetime(lt_id));
+            }
+        }
+        if !elided_args.is_empty() {
+            if let Some(prev_generic_args) = args {
+                elided_args.extend_from_slice(prev_generic_args.args.as_ref());
+                Some(GenericArgs {
+                    args: elided_args.into_boxed_slice(),
+                    has_self_type: prev_generic_args.has_self_type,
+                    bindings: prev_generic_args.bindings,
+                    parenthesized: prev_generic_args.parenthesized,
+                })
+            } else {
+                Some(GenericArgs {
+                    args: elided_args.into_boxed_slice(),
+                    has_self_type: false,
+                    bindings: Box::default(),
+                    parenthesized: GenericArgsParentheses::No,
+                })
+            }
+        } else {
+            args
+        }
     }
 }
 

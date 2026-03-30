@@ -7,7 +7,7 @@ use la_arena::Idx;
 use thin_vec::ThinVec;
 
 use crate::{
-    LifetimeParamId, TypeParamId,
+    HrtbLifetimeParamId, LifetimeParamId, TypeParamId,
     expr_store::{
         ExpressionStore,
         path::{GenericArg, Path},
@@ -158,13 +158,14 @@ pub enum LifetimeRef {
     Static,
     Placeholder,
     Param(LifetimeParamId),
+    HrtbParam(HrtbLifetimeParamId),
     Error,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TypeBound {
     Path(PathId, TraitBoundModifier),
-    ForLifetime(ThinVec<Name>, PathId),
+    ForLifetime(ThinVec<HrtbLifetimeParamId>, PathId),
     Lifetime(LifetimeRefId),
     Use(ThinVec<UseArgRef>),
     Error,

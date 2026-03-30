@@ -11,11 +11,11 @@ use syntax::ast::{self, HasName, HasTypeBounds};
 use thin_vec::ThinVec;
 
 use crate::{
-    GenericDefId, LifetimeParamId, TypeOrConstParamId, TypeParamId,
+    GenericDefId, HrtbLifetimeParamId, LifetimeParamId, TypeOrConstParamId, TypeParamId,
     expr_store::{TypePtr, lower::ExprCollector},
     hir::generics::{
-        ConstParamData, ElidedSource, GenericParams, LifetimeParamData, TypeOrConstParamData,
-        TypeParamData, TypeParamProvenance, WherePredicate,
+        ConstParamData, GenericParams, LifetimeParamData, TypeOrConstParamData, TypeParamData,
+        TypeParamProvenance, WherePredicate,
     },
     type_ref::{LifetimeRef, LifetimeRefId, TypeBound, TypeRef, TypeRefId},
 };
@@ -154,7 +154,10 @@ impl GenericParamsCollector {
                     }
                 }
                 ast::GenericParam::LifetimeParam(lifetime_param) => {
-                    let lifetime = ec.lower_lifetime_ref_opt(lifetime_param.lifetime());
+                    let lifetime = ec.lower_lifetime_ref_opt(
+                        lifetime_param.lifetime(),
+                        &mut ExprCollector::elided_lifetime_error_allocator,
+                    );
                     if let LifetimeRef::Named(name) = &ec.store.lifetimes[lifetime] {
                         let param = LifetimeParamData { name: name.clone(), elided_source: None };
                         let _idx = self.lifetimes.alloc(param);
@@ -182,7 +185,10 @@ impl GenericParamsCollector {
                     &mut ExprCollector::elided_lifetime_error_allocator,
                 ))
             } else if let Some(lifetime) = pred.lifetime() {
-                Either::Right(ec.lower_lifetime_ref(lifetime))
+                Either::Right(ec.lower_lifetime_ref(
+                    lifetime,
+                    &mut ExprCollector::elided_lifetime_error_allocator,
+                ))
             } else {
                 continue;
             };
@@ -280,14 +286,20 @@ impl GenericParamsCollector {
         parent: GenericDefId,
     ) -> impl for<'ec, 'db> FnMut(&'ec mut ExprCollector<'db>) -> LifetimeRefId {
         move |ec| {
-            let elided_source = Some(if ec.is_lowering_self_param {
-                ElidedSource::Self_
-            } else {
-                ElidedSource::Param
-            });
+            let elided_source = ec.elision_context.clone();
             let lifetime = LifetimeParamData { name: Name::anon_lifetime(), elided_source };
-            let param_id = LifetimeParamId { parent, local_id: lifetimes.alloc(lifetime) };
-            ec.alloc_lifetime_ref_desugared(LifetimeRef::Param(param_id))
+
+            let lifetime_ref = if matches!(ec.type_bound_source, super::TypeBoundSource::ForBinder)
+            {
+                let local_id = ec.alloc_hrtb_lifetime_param_desugared(lifetime);
+                let param_id = HrtbLifetimeParamId { owner_id: parent.into(), local_id };
+                ec.push_lifetime_in_type_bound_binder(param_id);
+                LifetimeRef::HrtbParam(param_id)
+            } else {
+                let param_id = LifetimeParamId { parent, local_id: lifetimes.alloc(lifetime) };
+                LifetimeRef::Param(param_id)
+            };
+            ec.alloc_lifetime_ref_desugared(lifetime_ref)
         }
     }
 

@@ -12,7 +12,8 @@ use span::Edition;
 use syntax::ast::{HasName, RangeOp};
 
 use crate::{
-    AdtId, DefWithBodyId, FunctionId, GenericDefId, StructId, TypeParamId, VariantId,
+    AdtId, DefWithBodyId, FunctionId, GenericDefId, HrtbLifetimeParamId, StructId, TypeParamId,
+    VariantId,
     attrs::AttrFlags,
     expr_store::path::{GenericArg, GenericArgs},
     hir::{
@@ -1225,6 +1226,14 @@ impl Printer<'_> {
         w!(self, "{}", generic_params[param.local_id].name.display(self.db, self.edition))
     }
 
+    pub(crate) fn print_hrtb_lifetime_param(&mut self, param: HrtbLifetimeParamId) {
+        w!(
+            self,
+            "{}",
+            self.store.hrtb_lifetimes[param.local_id].name.display(self.db, self.edition)
+        )
+    }
+
     pub(crate) fn print_lifetime_ref(&mut self, lt_ref: LifetimeRefId) {
         match &self.store[lt_ref] {
             LifetimeRef::Static => w!(self, "'static"),
@@ -1234,6 +1243,7 @@ impl Printer<'_> {
             LifetimeRef::Placeholder => w!(self, "'_"),
             LifetimeRef::Error => w!(self, "'{{error}}"),
             &LifetimeRef::Param(p) => self.print_lifetime_param(p),
+            &LifetimeRef::HrtbParam(p) => self.print_hrtb_lifetime_param(p),
         }
     }
 
@@ -1341,15 +1351,15 @@ impl Printer<'_> {
                     self.print_path(&self.store[*path]);
                 }
                 TypeBound::ForLifetime(lifetimes, path) => {
-                    w!(
-                        self,
-                        "for<{}> ",
-                        lifetimes
-                            .iter()
-                            .map(|it| it.display(self.db, self.edition))
-                            .format(", ")
-                            .to_string()
-                    );
+                    w!(self, "for<");
+                    let mut first = true;
+                    for &lifetime in lifetimes {
+                        if !mem::take(&mut first) {
+                            w!(self, ", ");
+                        }
+                        self.print_hrtb_lifetime_param(lifetime);
+                    }
+                    w!(self, "> ");
                     self.print_path(&self.store[*path]);
                 }
                 TypeBound::Lifetime(lt) => self.print_lifetime_ref(*lt),

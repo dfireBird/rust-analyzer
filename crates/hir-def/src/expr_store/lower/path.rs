@@ -7,7 +7,7 @@ use std::iter;
 
 use crate::expr_store::{
     lower::{
-        ExprCollector,
+        ExprCollector, TypeBoundSource,
         generics::{ImplTraitLowerFn, LifetimeElisionFn},
     },
     path::NormalPath,
@@ -91,22 +91,31 @@ pub(super) fn lower_path(
                     .unwrap_or(PathKind::Crate);
                 }
                 let name = name_ref.as_name();
-                let args = segment
+                let mut args = segment
                     .generic_arg_list()
                     .and_then(|it| {
                         collector.lower_generic_args(it, impl_trait_lower_fn, lifetime_elision_fn)
                     })
                     .or_else(|| {
-                        collector.lower_generic_args_from_fn_path(
-                            segment.parenthesized_arg_list(),
-                            segment.ret_type(),
-                            impl_trait_lower_fn,
-                            lifetime_elision_fn,
-                        )
+                        collector.with_type_bound_source(TypeBoundSource::ForBinder, |this| {
+                            this.lower_generic_args_from_fn_path(
+                                segment.parenthesized_arg_list(),
+                                segment.ret_type(),
+                                impl_trait_lower_fn,
+                                lifetime_elision_fn,
+                            )
+                        })
                     })
                     .or_else(|| {
                         segment.return_type_syntax().map(|_| GenericArgs::return_type_notation())
                     });
+                if collector.elision_context.is_some() {
+                    args = collector.collect_path_elided_liftetimes(
+                        path.clone(),
+                        args,
+                        lifetime_elision_fn,
+                    );
+                }
                 if args.is_some() {
                     generic_args.resize(segments.len(), None);
                     generic_args.push(args);

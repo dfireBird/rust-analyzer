@@ -19,8 +19,9 @@ use thin_vec::ThinVec;
 use triomphe::Arc;
 
 use crate::{
-    ConstId, EnumId, EnumVariantId, EnumVariantLoc, ExternBlockId, FunctionId, HasModule, ImplId,
-    ItemContainerId, ModuleId, StaticId, StructId, TraitId, TypeAliasId, UnionId, VariantId,
+    ConstId, EnumId, EnumVariantId, EnumVariantLoc, ExpressionStoreOwnerId, ExternBlockId,
+    FunctionId, HasModule, ImplId, ItemContainerId, ModuleId, StaticId, StructId, TraitId,
+    TypeAliasId, UnionId, VariantId,
     attrs::AttrFlags,
     db::DefDatabase,
     expr_store::{
@@ -864,6 +865,7 @@ impl VariantFields {
                     parent.container,
                     source.map(|src| src.field_list()),
                     enum_vis,
+                    Some(ExpressionStoreOwnerId::VariantFields(VariantId::EnumVariantId(id))),
                 );
                 (shape, fields)
             }
@@ -871,8 +873,13 @@ impl VariantFields {
                 let loc = id.lookup(db);
                 let source = loc.source(db);
                 let shape = adt_shape(source.value.kind());
-                let fields =
-                    lower_field_list(db, loc.container, source.map(|src| src.field_list()), None);
+                let fields = lower_field_list(
+                    db,
+                    loc.container,
+                    source.map(|src| src.field_list()),
+                    None,
+                    Some(ExpressionStoreOwnerId::VariantFields(VariantId::StructId(id))),
+                );
                 (shape, fields)
             }
             VariantId::UnionId(id) => {
@@ -883,6 +890,7 @@ impl VariantFields {
                     loc.container,
                     source.map(|src| src.record_field_list().map(ast::FieldList::RecordFieldList)),
                     None,
+                    Some(ExpressionStoreOwnerId::VariantFields(VariantId::UnionId(id))),
                 );
                 (FieldsShape::Record, fields)
             }
@@ -930,6 +938,7 @@ fn lower_field_list(
     module: ModuleId,
     fields: InFile<Option<ast::FieldList>>,
     override_visibility: Option<Option<ast::Visibility>>,
+    owner: Option<crate::ExpressionStoreOwnerId>,
 ) -> Option<(Arena<FieldData>, ExpressionStore, ExpressionStoreSourceMap)> {
     let file_id = fields.file_id;
     match fields.value? {
@@ -939,6 +948,7 @@ fn lower_field_list(
             InFile::new(file_id, fields.fields().map(|field| (field.ty(), field))),
             |_, field| as_name_opt(field.name()),
             override_visibility,
+            owner,
         ),
         ast::FieldList::TupleFieldList(fields) => lower_fields(
             db,
@@ -946,6 +956,7 @@ fn lower_field_list(
             InFile::new(file_id, fields.fields().map(|field| (field.ty(), field))),
             |idx, _| Name::new_tuple_field(idx),
             override_visibility,
+            owner,
         ),
     }
 }
@@ -956,9 +967,10 @@ fn lower_fields<Field: ast::HasAttrs + ast::HasVisibility>(
     fields: InFile<impl Iterator<Item = (Option<ast::Type>, Field)>>,
     mut field_name: impl FnMut(usize, &Field) -> Name,
     override_visibility: Option<Option<ast::Visibility>>,
+    owner: Option<crate::ExpressionStoreOwnerId>,
 ) -> Option<(Arena<FieldData>, ExpressionStore, ExpressionStoreSourceMap)> {
     let cfg_options = module.krate(db).cfg_options(db);
-    let mut col = ExprCollector::signature(db, module, fields.file_id);
+    let mut col = ExprCollector::signature(db, module, fields.file_id, owner);
     let override_visibility = override_visibility.map(|vis| {
         LazyCell::new(|| {
             let span_map = db.span_map(fields.file_id);
