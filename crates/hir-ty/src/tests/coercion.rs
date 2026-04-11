@@ -1,4 +1,6 @@
-use super::{check, check_no_mismatches, check_types};
+use expect_test::expect;
+
+use super::{check, check_infer, check_no_mismatches, check_types};
 
 #[test]
 fn block_expr_type_mismatch() {
@@ -898,6 +900,30 @@ fn test() {
  // ^^^^^^ adjustments: Borrow(Ref(Not))
            // ^^^^^^ adjustments: Borrow(Ref(Not))
 }",
+    );
+}
+
+#[test]
+fn check_inf() {
+    check_infer(
+        r#"
+trait Trait {
+    fn foo(&self, other: &Self) -> bool;
+}
+
+struct Struct;
+
+impl Trait for Struct {
+    fn foo(&self, b: &Self) -> bool {
+        true
+    }
+}
+
+fn test() {
+    (&Struct).foo(&Struct);
+}
+"#,
+        expect![[r#""#]],
     );
 }
 

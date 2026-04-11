@@ -2484,7 +2484,7 @@ pub(crate) fn callable_item_signature<'db>(
     db: &'db dyn HirDatabase,
     def: CallableDefId,
 ) -> EarlyBinder<'db, PolyFnSig<'db>> {
-    return callable_item_signature_query(db, def).get_with(|sig| sig.get());
+    return dbg!(callable_item_signature_query(db, def).get_with(|sig| sig.get()));
 
     #[salsa::tracked(returns(ref))]
     pub(crate) fn callable_item_signature_query<'db>(
@@ -2502,6 +2502,7 @@ pub(crate) fn callable_item_signature<'db>(
 fn fn_sig_for_fn(db: &dyn HirDatabase, def: FunctionId) -> StoredEarlyBinder<StoredPolyFnSig> {
     let data = FunctionSignature::of(db, def);
     let resolver = def.resolver(db);
+    dbg!(&resolver);
     let interner = DbInterner::new_no_crate(db);
     let mut ctx_params = TyLoweringContext::new(
         db,

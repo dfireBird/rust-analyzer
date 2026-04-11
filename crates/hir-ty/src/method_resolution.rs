@@ -245,7 +245,7 @@ impl<'db> InferenceTable<'db> {
         let args = GenericArgs::for_item(
             self.interner(),
             trait_def_id.into(),
-            |param_idx, param_id, _| match param_id {
+            |param_idx, param_id, _| match dbg!(param_id) {
                 GenericParamId::LifetimeParamId(_) | GenericParamId::ConstParamId(_) => {
                     unreachable!("did not expect operator trait to have lifetime/const")
                 }
@@ -308,8 +308,9 @@ impl<'db> InferenceTable<'db> {
         // N.B., instantiate late-bound regions before normalizing the
         // function signature so that normalization does not need to deal
         // with bound regions.
+        dbg!(&args);
         let fn_sig =
-            self.db.callable_item_signature(method_item.into()).instantiate(interner, args);
+            dbg!(self.db.callable_item_signature(method_item.into())).instantiate(interner, args);
         let fn_sig = self
             .infer_ctxt
             .instantiate_binder_with_fresh_vars(BoundRegionConversionTime::FnCall, fn_sig);

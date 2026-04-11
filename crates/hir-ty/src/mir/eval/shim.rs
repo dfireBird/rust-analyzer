@@ -349,7 +349,7 @@ impl<'db> Evaluator<'db> {
                 Ok(arg[ptr_size..].into())
             }
             DropInPlace => {
-                let ty = generic_args.as_slice().first().and_then(|it| it.ty()).ok_or(
+                let ty = generic_args.iter().find_map(|it| it.ty()).ok_or(
                     MirEvalError::InternalError(
                         "generic argument of drop_in_place is not provided".into(),
                     ),
@@ -731,7 +731,7 @@ impl<'db> Evaluator<'db> {
         }
         match name {
             "size_of" => {
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "size_of generic arg is not provided".into(),
                     ));
@@ -742,7 +742,7 @@ impl<'db> Evaluator<'db> {
             // FIXME: `min_align_of` was renamed to `align_of` in Rust 1.89
             // (https://github.com/rust-lang/rust/pull/142410)
             "min_align_of" | "align_of" => {
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "align_of generic arg is not provided".into(),
                     ));
@@ -751,7 +751,7 @@ impl<'db> Evaluator<'db> {
                 destination.write_from_bytes(self, &align.to_le_bytes()[0..destination.size])
             }
             "size_of_val" => {
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "size_of_val generic arg is not provided".into(),
                     ));
@@ -772,7 +772,7 @@ impl<'db> Evaluator<'db> {
             // FIXME: `min_align_of_val` was renamed to `align_of_val` in Rust 1.89
             // (https://github.com/rust-lang/rust/pull/142410)
             "min_align_of_val" | "align_of_val" => {
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "align_of_val generic arg is not provided".into(),
                     ));
@@ -791,7 +791,7 @@ impl<'db> Evaluator<'db> {
                 }
             }
             "type_name" => {
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "type_name generic arg is not provided".into(),
                     ));
@@ -818,7 +818,7 @@ impl<'db> Evaluator<'db> {
                     .write_from_bytes(self, &len.to_le_bytes())
             }
             "needs_drop" => {
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "size_of generic arg is not provided".into(),
                     ));
@@ -886,7 +886,7 @@ impl<'db> Evaluator<'db> {
                 let lhs = i128::from_le_bytes(pad16(lhs.get(self)?, false));
                 let rhs = i128::from_le_bytes(pad16(rhs.get(self)?, false));
                 let ans = lhs.wrapping_sub(rhs);
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "ptr_offset_from generic arg is not provided".into(),
                     ));
@@ -1008,7 +1008,7 @@ impl<'db> Evaluator<'db> {
                         "copy_nonoverlapping args are not provided".into(),
                     ));
                 };
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "copy_nonoverlapping generic arg is not provided".into(),
                     ));
@@ -1027,12 +1027,12 @@ impl<'db> Evaluator<'db> {
                     return Err(MirEvalError::InternalError("offset args are not provided".into()));
                 };
                 let ty = if name == "offset" {
-                    let Some(ty0) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                    let Some(ty0) = generic_args.iter().find_map(|it| it.ty()) else {
                         return Err(MirEvalError::InternalError(
                             "offset generic arg is not provided".into(),
                         ));
                     };
-                    let Some(ty1) = generic_args.as_slice().get(1).and_then(|it| it.ty()) else {
+                    let Some(ty1) = generic_args.iter().filter_map(|it| it.ty()).nth(1) else {
                         return Err(MirEvalError::InternalError(
                             "offset generic arg is not provided".into(),
                         ));
@@ -1055,7 +1055,7 @@ impl<'db> Evaluator<'db> {
                         }
                     }
                 } else {
-                    let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                    let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                         return Err(MirEvalError::InternalError(
                             "arith_offset generic arg is not provided".into(),
                         ));
@@ -1180,7 +1180,8 @@ impl<'db> Evaluator<'db> {
                         "discriminant_value arg is not provided".into(),
                     ));
                 };
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "discriminant_value generic arg is not provided".into(),
                     ));
@@ -1244,7 +1245,7 @@ impl<'db> Evaluator<'db> {
                     ));
                 };
                 let dst = Address::from_bytes(ptr.get(self)?)?;
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "write_via_copy generic arg is not provided".into(),
                     ));
@@ -1261,7 +1262,7 @@ impl<'db> Evaluator<'db> {
                 };
                 let count = from_bytes!(usize, count.get(self)?);
                 let val = from_bytes!(u8, val.get(self)?);
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "write_bytes generic arg is not provided".into(),
                     ));
@@ -1289,7 +1290,7 @@ impl<'db> Evaluator<'db> {
                         "three_way_compare args are not provided".into(),
                     ));
                 };
-                let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+                let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
                     return Err(MirEvalError::InternalError(
                         "three_way_compare generic arg is not provided".into(),
                     ));
@@ -1423,7 +1424,7 @@ impl<'db> Evaluator<'db> {
 
         // The rest of atomic intrinsics have exactly one generic arg
 
-        let Some(ty) = generic_args.as_slice().first().and_then(|it| it.ty()) else {
+        let Some(ty) = generic_args.iter().find_map(|it| it.ty()) else {
             return Err(MirEvalError::InternalError(
                 "atomic intrinsic generic arg is not provided".into(),
             ));

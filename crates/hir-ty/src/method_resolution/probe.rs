@@ -2013,6 +2013,7 @@ impl<'a, 'db, Choice: ProbeChoice<'db>> ProbeContext<'a, 'db, Choice> {
         // if there are any.
         let generics = GenericParams::of(self.db(), method.into());
 
+        dbg!(&args);
         let xform_fn_sig = if generics.is_empty() {
             fn_sig.instantiate(self.interner(), args)
         } else {
@@ -2035,8 +2036,10 @@ impl<'a, 'db, Choice: ProbeChoice<'db>> ProbeContext<'a, 'db, Choice> {
                     }
                 },
             );
+            dbg!(&args);
             fn_sig.instantiate(self.interner(), args)
         };
+        dbg!(&xform_fn_sig);
 
         self.interner().instantiate_bound_regions_with_erased(xform_fn_sig)
     }
