@@ -32,8 +32,8 @@ use hir_expand::{
     name::{AsName, Name},
 };
 use hir_ty::{
-    Adjustment, InferBodyId, InferenceResult, LifetimeElisionKind, ParamEnvAndCrate,
-    TyLoweringContext, TyLoweringInferVarsCtx,
+    Adjustment, InferBodyId, InferenceResult, LifetimeElisionKind, LifetimeLoweringMode,
+    ParamEnvAndCrate, TyLoweringContext, TyLoweringInferVarsCtx,
     diagnostics::{
         InsideUnsafeBlock, record_literal_missing_fields, record_pattern_missing_fields,
         unsafe_operations,
@@ -415,6 +415,7 @@ impl<'db> SourceAnalyzer<'db> {
             // (this can impact the lifetimes generated, e.g. in `const` they won't be `'static`, but this seems like a
             // small problem).
             LifetimeElisionKind::Infer,
+            LifetimeLoweringMode::LateParam,
         )
         .with_infer_vars_behavior(Some(&mut vars_cts))
         .lower_ty(type_ref);
@@ -1834,6 +1835,7 @@ fn resolve_hir_path_(
                     def,
                     &generics,
                     LifetimeElisionKind::Infer,
+                    LifetimeLoweringMode::LateParam,
                 )
                 .lower_ty_ext(type_ref);
                 res.map(|ty_ns| (ty_ns, path.segments().first()))
@@ -1992,6 +1994,7 @@ fn resolve_hir_path_qualifier(
                     def,
                     &generics,
                     LifetimeElisionKind::Infer,
+                    LifetimeLoweringMode::LateParam,
                 )
                 .lower_ty_ext(type_ref);
                 res.map(|ty_ns| (ty_ns, path.segments().first()))
